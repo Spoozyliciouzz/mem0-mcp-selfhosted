@@ -85,34 +85,65 @@ def build_config() -> tuple[dict[str, Any], list[ProviderInfo], dict[str, Any] |
         embedder_config["ollama_base_url"] = embed_url
 
     # --- Vector Store ---
-    qdrant_url = env("MEM0_QDRANT_URL", "http://localhost:6333")
+    vector_provider = env("MEM0_VECTOR_PROVIDER", "qdrant")
+    _supported_vector_providers = ("qdrant", "pgvector")
+    if vector_provider not in _supported_vector_providers:
+        raise ValueError(
+            f"Unsupported MEM0_VECTOR_PROVIDER={vector_provider!r}. "
+            f"Supported: {list(_supported_vector_providers)}"
+        )
+
     collection = env("MEM0_COLLECTION", "mem0_mcp_selfhosted")
-    qdrant_api_key = opt_env("MEM0_QDRANT_API_KEY")
-    qdrant_on_disk = bool_env("MEM0_QDRANT_ON_DISK")
 
     vector_config: dict[str, Any] = {
         "collection_name": collection,
-        "url": qdrant_url,
         "embedding_model_dims": embed_dims,
     }
-    if qdrant_api_key:
-        vector_config["api_key"] = qdrant_api_key
-    if qdrant_on_disk:
-        vector_config["on_disk"] = True
-    qdrant_timeout = opt_env("MEM0_QDRANT_TIMEOUT")
-    if qdrant_timeout:
-        # QdrantConfig's Pydantic model does not accept "timeout" directly.
-        # Create a pre-configured QdrantClient with the timeout and pass it
-        # via the "client" field, which mem0ai uses as-is.
-        from qdrant_client import QdrantClient
 
-        client_kwargs: dict[str, Any] = {
-            "url": qdrant_url,
-            "timeout": int(qdrant_timeout),
-        }
+    if vector_provider == "pgvector":
+        # Direct Postgres connection (e.g. Supabase session pooler).
+        # Deliberately NOT using mem0ai's "supabase" (vecs) provider — it goes
+        # through PostgREST schema cache and breaks on memory_migrations.
+        pg_connection_string = opt_env("MEM0_PG_CONNECTION_STRING")
+        if pg_connection_string:
+            vector_config["connection_string"] = pg_connection_string
+        else:
+            vector_config["host"] = env("MEM0_PG_HOST", "localhost")
+            vector_config["port"] = int(env("MEM0_PG_PORT", "5432"))
+            vector_config["dbname"] = env("MEM0_PG_DBNAME", "postgres")
+            pg_user = opt_env("MEM0_PG_USER")
+            pg_password = opt_env("MEM0_PG_PASSWORD")
+            if pg_user:
+                vector_config["user"] = pg_user
+            if pg_password:
+                vector_config["password"] = pg_password
+        pg_sslmode = opt_env("MEM0_PG_SSLMODE")
+        if pg_sslmode:
+            vector_config["sslmode"] = pg_sslmode
+    else:
+        qdrant_url = env("MEM0_QDRANT_URL", "http://localhost:6333")
+        qdrant_api_key = opt_env("MEM0_QDRANT_API_KEY")
+        qdrant_on_disk = bool_env("MEM0_QDRANT_ON_DISK")
+
+        vector_config["url"] = qdrant_url
         if qdrant_api_key:
-            client_kwargs["api_key"] = qdrant_api_key
-        vector_config["client"] = QdrantClient(**client_kwargs)
+            vector_config["api_key"] = qdrant_api_key
+        if qdrant_on_disk:
+            vector_config["on_disk"] = True
+        qdrant_timeout = opt_env("MEM0_QDRANT_TIMEOUT")
+        if qdrant_timeout:
+            # QdrantConfig's Pydantic model does not accept "timeout" directly.
+            # Create a pre-configured QdrantClient with the timeout and pass it
+            # via the "client" field, which mem0ai uses as-is.
+            from qdrant_client import QdrantClient
+
+            client_kwargs: dict[str, Any] = {
+                "url": qdrant_url,
+                "timeout": int(qdrant_timeout),
+            }
+            if qdrant_api_key:
+                client_kwargs["api_key"] = qdrant_api_key
+            vector_config["client"] = QdrantClient(**client_kwargs)
 
     # --- History ---
     history_db_path = opt_env("MEM0_HISTORY_DB_PATH")
@@ -128,7 +159,7 @@ def build_config() -> tuple[dict[str, Any], list[ProviderInfo], dict[str, Any] |
             "config": embedder_config,
         },
         "vector_store": {
-            "provider": "qdrant",
+            "provider": vector_provider,
             "config": vector_config,
         },
         "version": "v1.1",

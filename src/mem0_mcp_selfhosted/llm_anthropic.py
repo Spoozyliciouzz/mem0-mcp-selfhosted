@@ -340,7 +340,15 @@ class AnthropicOATLLM(LLMBase):
         raise last_exc  # type: ignore[misc]
 
     def _supports_structured_output(self) -> bool:
-        """Check if the configured model supports structured outputs."""
+        """Check if the configured model supports structured outputs.
+
+        Disabled by default: the output_config json_schema path returns empty
+        content for fact-extraction calls (mem0 gets no facts, stores nothing).
+        The plain-text path + extract_json works correctly. Re-enable with
+        MEM0_ANTHROPIC_STRUCTURED_OUTPUT=true if upstream fixes this.
+        """
+        if env("MEM0_ANTHROPIC_STRUCTURED_OUTPUT", "false").lower() != "true":
+            return False
         return self.config.model.startswith(_STRUCTURED_OUTPUT_PREFIXES)
 
     def _select_schema(self, messages: list[dict]) -> dict:
